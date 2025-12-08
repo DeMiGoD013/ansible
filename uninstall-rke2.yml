@@ -1,0 +1,33 @@
+---
+- name: Uninstall RKE2 completely
+  hosts: all_servers
+  become: true
+
+  tasks:
+    - name: Stop RKE2 service if running
+      service:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - rke2-server
+        - rke2-agent
+      ignore_errors: yes
+
+    - name: Run uninstall script for server
+      command: /usr/local/bin/rke2-uninstall.sh
+      ignore_errors: yes
+
+    - name: Run uninstall script for agent
+      command: /usr/local/bin/rke2-agent-uninstall.sh
+      ignore_errors: yes
+
+    - name: Remove remaining RKE2 directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/rancher
+        - /var/lib/rancher
+        - /var/lib/kubelet
+        - /var/lib/etcd
+        - /etc/systemd/system/rke2*

@@ -1,0 +1,32 @@
+---
+- name: Install Longhorn Storage on Kubernetes
+  hosts: MASTER
+  become: yes
+
+  tasks:
+    - name: Create longhorn-system namespace
+      shell: kubectl create namespace longhorn-system --dry-run=client -o yaml | kubectl apply -f -
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+    - name: Deploy Longhorn using official manifest
+      shell: |
+        kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/master/deploy/longhorn.yaml
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+    - name: Wait for Longhorn pods to be ready
+      shell: |
+        kubectl -n longhorn-system wait --for=condition=ready pod --all --timeout=600s
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+    - name: Show Longhorn status
+      shell: kubectl get pods -n longhorn-system -o wide
+      register: lh_status
+      changed_when: false
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+
+    - debug:
+        var: lh_status.stdout

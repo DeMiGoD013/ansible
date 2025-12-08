@@ -1,0 +1,26 @@
+---
+- name: Install Cert Manager on Kubernetes Cluster
+  hosts: MASTER
+  become: yes
+
+  tasks:
+    - name: Apply Cert Manager CRDs and components
+      shell: |
+        kubectl apply --validate=false -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      register: cert_output
+      changed_when: "'created' in cert_output.stdout or 'configured' in cert_output.stdout"
+
+    - name: Wait for Cert Manager pods to be ready
+      shell: |
+        kubectl -n cert-manager wait --for=condition=available --timeout=300s deployment --all
+      register: wait_output
+
+    - name: Show Cert Manager status
+      shell: kubectl get pods -n cert-manager
+      register: cert_status
+      changed_when: false
+
+    - debug:
+        var: cert_status.stdout

@@ -1,0 +1,19 @@
+---
+- name: Baseline setup for all servers
+  hosts: all_servers
+  become: yes
+
+  tasks:
+    - name: Update packages
+      apt:
+        update_cache: yes
+
+    - name: Install dependencies
+      apt:
+        name:
+          - curl
+          - wget
+          - vim
+          - net-tools
+          - htop
+        state: present

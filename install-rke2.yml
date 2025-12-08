@@ -1,0 +1,41 @@
+---
+- name: Install RKE2 Master
+  hosts: MASTER
+  become: true
+
+  tasks:
+    - name: Download and install RKE2 server
+      shell: curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=server sh -
+
+    - name: Enable and start RKE2 server
+      systemd:
+        name: rke2-server
+        enabled: true
+        state: started
+
+- name: Install RKE2 Worker
+  hosts: WORKER
+  become: true
+
+  tasks:
+    - name: Download and install RKE2 agent
+      shell: curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent sh -
+
+    - name: Create RKE2 config directory
+      file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: '0755'
+
+    - name: Create config.yaml for worker
+      copy:
+        dest: /etc/rancher/rke2/config.yaml
+        content: |
+          server: https://10.0.2.15:9345
+          token: K10bff3defe6aace187f330b8f5b83b35e44c533ff4ef1b808a8ebfcb41bc4d99d5::server:b66cfbccc4e4932c250660a908b98c6b
+
+    - name: Enable and start agent
+      systemd:
+        name: rke2-agent
+        enabled: true
+        state: started
