@@ -1,0 +1,12 @@
+# sensitive
+*.pem
+*.key
+~/.kube/config
+kubeconfig
+id_rsa
+id_ed25519
+
+# python/IDE
+__pycache__/
+*.pyc
+.vscode/
