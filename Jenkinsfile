@@ -1,6 +1,6 @@
 pipeline {
+
   agent any
-	}
 
   parameters {
     choice(name: 'ACTION', choices: ['install','uninstall'], description: 'Choose whether to install or uninstall RKE2')
@@ -11,48 +11,38 @@ pipeline {
   }
 
   environment {
-    // credentialsId must match an SSH private key credential created in Jenkins (see instructions below)
-    SSH_CREDENTIALS_ID = 'rke2_ssh' 
+    SSH_CREDENTIALS_ID = 'rke2_ssh'
     ANSIBLE_LOG = 'ansible-run.log'
-    // Ensure Ansible doesn't prompt
     ANSIBLE_HOST_KEY_CHECKING = 'False'
   }
 
   stages {
+
     stage('Prepare') {
       steps {
-        // show repo contents for debugging
         sh 'echo "Workspace contents:" && ls -la'
-        // print chosen parameters
         sh 'echo "ACTION=$ACTION INVT=$INVENTORY_PATH LIMIT=$ANSIBLE_LIMIT DRY_RUN=$DRY_RUN"'
       }
     }
 
     stage('Checkout') {
       steps {
-        // default checkout; Jenkins will checkout repo for Multibranch Pipeline or Pipeline from SCM
         checkout scm
       }
     }
 
     stage('Install dependencies (if needed)') {
       steps {
-        // If you're using a container that already has ansible this is normally not needed.
-        // But we'll check ansible version for clarity.
         sh 'ansible --version || (pip install ansible && ansible --version)'
       }
     }
 
     stage('Run playbook') {
       steps {
-        // Use ssh-agent wrapper to load private key credential so ansible can SSH to targets.
-        // Requires "SSH Agent" plugin in Jenkins and a credential of type "SSH Username with private key".
         sshagent (credentials: [env.SSH_CREDENTIALS_ID]) {
           script {
-            // select playbook
             def playbook = (params.ACTION == 'install') ? 'install-rke2.yml' : 'uninstall-rke2.yml'
 
-            // build command
             def extra = params.EXTRA_VARS?.trim() ? "--extra-vars '${params.EXTRA_VARS}'" : ''
             def limit = params.ANSIBLE_LIMIT?.trim() ? "-l '${params.ANSIBLE_LIMIT}'" : ''
             def check = params.DRY_RUN ? '--check' : ''
@@ -71,7 +61,8 @@ pipeline {
         archiveArtifacts artifacts: "${ANSIBLE_LOG}", allowEmptyArchive: true
       }
     }
-  }
+
+  } // end stages
 
   post {
     success {
@@ -81,8 +72,8 @@ pipeline {
       echo "Playbook failed — check the archived ${ANSIBLE_LOG} for details."
     }
     always {
-      // print last 200 lines of log for quick view
       sh "tail -n 200 ${ANSIBLE_LOG} || true"
     }
   }
-}
+
+} // end pipeline
