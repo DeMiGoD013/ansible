@@ -1,7 +1,6 @@
 pipeline {
-  agent any 
-   ...
-  }
+  agent any
+	}
 
   parameters {
     choice(name: 'ACTION', choices: ['install','uninstall'], description: 'Choose whether to install or uninstall RKE2')
