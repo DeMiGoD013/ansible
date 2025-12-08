@@ -1,10 +1,6 @@
 pipeline {
-  agent { 
-    // uses a Docker image with Ansible installed
-    docker {
-      image 'williamyeh/ansible:alpine3'   // lightweight image with ansible + ssh client
-      args '-u root:root'                  // optional: run as root if needed in your Jenkins setup
-    }
+  agent any 
+   ...
   }
 
   parameters {
