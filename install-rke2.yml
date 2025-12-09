@@ -31,7 +31,7 @@
       set_fact:
         rke2_token: "{{ token_raw.content | b64decode | trim }}"
 
-    - name: Show token (debug)
+    - name: Show token
       debug:
         msg: "Master token is {{ rke2_token }}"
 
@@ -44,7 +44,7 @@
   become: true
 
   vars:
-    master_ip: "{{ hostvars[groups['MASTER'][0]].ansible_host }}"
+    master_ip: "{{ hostvars[groups['MASTER'][0]].inventory_hostname }}"
 
   tasks:
 
