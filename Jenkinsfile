@@ -1,22 +1,60 @@
 pipeline {
+
   agent any
 
   parameters {
-    choice(name: 'ACTION', choices: ['install','uninstall'], description: 'Choose operation')
+    choice(name: 'ACTION', choices: ['install','uninstall'], description: 'Choose whether to install or uninstall RKE2')
+    string(name: 'INVENTORY_PATH', defaultValue: 'inventory.ini', description: 'Path to Ansible inventory (relative to repo root)')
+    string(name: 'EXTRA_VARS', defaultValue: '', description: 'Any extra vars to pass to ansible-playbook')
+    string(name: 'ANSIBLE_LIMIT', defaultValue: '', description: 'Limit to subset of hosts (optional)')
+    booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'If true, perform ansible-playbook --check')
   }
 
   environment {
-    SSH_CREDENTIALS_ID = 'sai'        // set this to your Jenkins SSH credential id
+    SSH_CREDENTIALS_ID = 'rke2_ssh'
     ANSIBLE_LOG = 'ansible-run.log'
-    MASTER_IP = '10.0.2.15'           // change if different
+    MASTER_IP = '10.0.2.15'     // <---- CHANGE IF YOUR MASTER CHANGES
+    ANSIBLE_HOST_KEY_CHECKING = 'False'
   }
 
   stages {
-    stage('Checkout') {
-      steps { checkout scm }
+
+    stage('Prepare') {
+      steps {
+        sh 'echo "Workspace contents:" && ls -la'
+        sh 'echo ACTION=$ACTION INVT=$INVENTORY_PATH LIMIT=$ANSIBLE_LIMIT DRY_RUN=$DRY_RUN'
+      }
     }
 
-    stage('Install dependencies (optional)') {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    // ⭐ NEW STAGE: Add known_hosts dynamically
+    stage('Prepare SSH known_hosts') {
+      steps {
+        sshagent(credentials: [env.SSH_CREDENTIALS_ID]) {
+          sh '''
+            mkdir -p ~/.ssh
+            touch ~/.ssh/known_hosts
+
+            # Extract IPs from inventory
+            grep -Eo '^[0-9]+(\\.[0-9]+){3}' ${INVENTORY_PATH} > hosts.list || true
+            grep -Eo 'ansible_host=[0-9]+(\\.[0-9]+){3}' ${INVENTORY_PATH} | sed 's/ansible_host=//' >> hosts.list || true
+
+            sort -u hosts.list | while read host; do
+              ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null || true
+            done
+
+            rm -f hosts.list
+          '''
+        }
+      }
+    }
+
+    stage('Install dependencies (if needed)') {
       steps {
         sh 'ansible --version || (pip install ansible && ansible --version)'
       }
@@ -24,50 +62,70 @@ pipeline {
 
     stage('Run playbook') {
       steps {
-        sshagent(credentials: [env.SSH_CREDENTIALS_ID]) {
+        sshagent (credentials: [env.SSH_CREDENTIALS_ID]) {
           script {
             def playbook = (params.ACTION == 'install') ? 'install-rke2.yml' : 'uninstall-rke2.yml'
+
+            def extra = params.EXTRA_VARS?.trim() ? "--extra-vars '${params.EXTRA_VARS}'" : ''
+            def limit = params.ANSIBLE_LIMIT?.trim() ? "-l '${params.ANSIBLE_LIMIT}'" : ''
+            def check = params.DRY_RUN ? '--check' : ''
+
             sh """
               echo "Running playbook: ${playbook}"
-              ansible-playbook -i inventory.ini ${playbook} | tee ${ANSIBLE_LOG}
+              ansible-playbook -i ${params.INVENTORY_PATH} ${playbook} ${extra} ${limit} ${check} | tee ${ANSIBLE_LOG}
             """
           }
         }
       }
     }
 
-    stage('Fetch kubeconfig from Master') {
-      when { expression { params.ACTION == 'install' } }
+    // ⭐ NEW STAGE: AUTO FETCH kubeconfig (ONLY for INSTALL)
+    stage('Fetch kubeconfig') {
+      when {
+        expression { params.ACTION == 'install' }
+      }
       steps {
+        echo "Fetching kubeconfig from master node..."
         sshagent(credentials: [env.SSH_CREDENTIALS_ID]) {
           sh '''
-            echo "Fetching kubeconfig from master..."
-            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/etc/rancher/rke2/rke2.yaml master-kubeconfig.yaml || \
-            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/home/sai/rke2.yaml master-kubeconfig.yaml
-            echo "Patching kubeconfig server IP..."
-            sed -i "s/127.0.0.1/${MASTER_IP}/g" master-kubeconfig.yaml
-            echo "Done."
+            # Copy kubeconfig from master
+            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/home/sai/.kube/config kubeconfig.yaml || {
+              echo "WARNING: kubeconfig not found on master"
+              exit 1
+            }
           '''
         }
       }
     }
 
-    stage('Archive logs & kubeconfig') {
+    stage('Archive logs') {
       steps {
-        archiveArtifacts artifacts: "${ANSIBLE_LOG}, master-kubeconfig.yaml", allowEmptyArchive: true
+        archiveArtifacts artifacts: "${ANSIBLE_LOG}", allowEmptyArchive: true
       }
     }
-  }
+
+    // ⭐ NEW STAGE: ARCHIVE KUBECONFIG FILE
+    stage('Archive kubeconfig') {
+      when {
+        expression { params.ACTION == 'install' }
+      }
+      steps {
+        archiveArtifacts artifacts: "kubeconfig.yaml", allowEmptyArchive: false
+      }
+    }
+
+  } // end stages
 
   post {
+    success {
+      echo "Playbook finished successfully."
+    }
+    failure {
+      echo "Playbook failed — check ansible-run.log for details."
+    }
     always {
       sh "tail -n 200 ${ANSIBLE_LOG} || true"
     }
-    success {
-      echo "Pipeline finished successfully."
-    }
-    failure {
-      echo "Pipeline failed — check the archived ${ANSIBLE_LOG} for details."
-    }
   }
-}
+
+} // end pipeline
