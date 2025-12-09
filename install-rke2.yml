@@ -1,11 +1,17 @@
 ---
+# ============================================================
+# INSTALL RKE2 MASTER
+# ============================================================
 - name: Install RKE2 Master
   hosts: MASTER
   become: true
 
   tasks:
+
     - name: Download and install RKE2 server
       shell: curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=server sh -
+      args:
+        warn: false
 
     - name: Enable and start RKE2 server
       systemd:
@@ -13,13 +19,42 @@
         enabled: true
         state: started
 
+    - name: Wait for token file to be created
+      wait_for:
+        path: /var/lib/rancher/rke2/server/token
+        timeout: 120
+
+    - name: Read RKE2 master token
+      slurp:
+        src: /var/lib/rancher/rke2/server/token
+      register: token_file
+
+    - name: Save token to host facts
+      set_fact:
+        rke2_token: "{{ token_file.content | b64decode | trim }}"
+
+    - name: Show extracted token (debug)
+      debug:
+        msg: "RKE2 token is {{ rke2_token }}"
+
+
+# ============================================================
+# INSTALL RKE2 WORKER
+# ============================================================
 - name: Install RKE2 Worker
   hosts: WORKER
   become: true
 
+  vars:
+    master_ip: "{{ hostvars[groups['MASTER'][0]]['ansible_host'] | default(groups['MASTER'][0]) }}"
+    rke2_token: "{{ hostvars[groups['MASTER'][0]]['rke2_token'] }}"
+
   tasks:
+
     - name: Download and install RKE2 agent
       shell: curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent sh -
+      args:
+        warn: false
 
     - name: Create RKE2 config directory
       file:
@@ -27,15 +62,16 @@
         state: directory
         mode: '0755'
 
-    - name: Create config.yaml for worker
+    - name: Create worker config.yaml
       copy:
         dest: /etc/rancher/rke2/config.yaml
         content: |
-          server: https://10.0.2.15:9345
-          token: K10bff3defe6aace187f330b8f5b83b35e44c533ff4ef1b808a8ebfcb41bc4d99d5::server:b66cfbccc4e4932c250660a908b98c6b
+          server: https://{{ master_ip }}:9345
+          token: {{ rke2_token }}
+      mode: '0644'
 
-    - name: Enable and start agent
+    - name: Enable and start RKE2 agent
       systemd:
         name: rke2-agent
         enabled: true
-        state: started
+        state: restarted
