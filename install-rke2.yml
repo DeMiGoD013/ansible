@@ -1,60 +1,55 @@
 ---
-# ============================================================
+# ---------------------------------------------------------
 # INSTALL RKE2 MASTER
-# ============================================================
+# ---------------------------------------------------------
 - name: Install RKE2 Master
   hosts: MASTER
   become: true
 
   tasks:
 
-    - name: Download and install RKE2 server
+    - name: Install RKE2 server
       shell: curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=server sh -
-      args:
-        warn: false
 
-    - name: Enable and start RKE2 server
+    - name: Enable + start RKE2 server
       systemd:
         name: rke2-server
-        enabled: true
+        enabled: yes
         state: started
 
-    - name: Wait for token file to be created
+    - name: Wait for RKE2 token file
       wait_for:
         path: /var/lib/rancher/rke2/server/token
         timeout: 120
 
-    - name: Read RKE2 master token
+    - name: Read token file
       slurp:
         src: /var/lib/rancher/rke2/server/token
-      register: token_file
+      register: token_raw
 
-    - name: Save token to host facts
+    - name: Decode token
       set_fact:
-        rke2_token: "{{ token_file.content | b64decode | trim }}"
+        rke2_token: "{{ token_raw.content | b64decode | trim }}"
 
-    - name: Show extracted token (debug)
+    - name: Show token (debug)
       debug:
-        msg: "RKE2 token is {{ rke2_token }}"
+        msg: "Master token is {{ rke2_token }}"
 
 
-# ============================================================
+# ---------------------------------------------------------
 # INSTALL RKE2 WORKER
-# ============================================================
+# ---------------------------------------------------------
 - name: Install RKE2 Worker
   hosts: WORKER
   become: true
 
   vars:
-    master_ip: "{{ hostvars[groups['MASTER'][0]]['ansible_host'] | default(groups['MASTER'][0]) }}"
-    rke2_token: "{{ hostvars[groups['MASTER'][0]]['rke2_token'] }}"
+    master_ip: "{{ hostvars[groups['MASTER'][0]].ansible_host }}"
 
   tasks:
 
-    - name: Download and install RKE2 agent
+    - name: Install RKE2 agent
       shell: curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent sh -
-      args:
-        warn: false
 
     - name: Create RKE2 config directory
       file:
@@ -65,13 +60,13 @@
     - name: Create worker config.yaml
       copy:
         dest: /etc/rancher/rke2/config.yaml
+        mode: '0644'
         content: |
           server: https://{{ master_ip }}:9345
-          token: {{ rke2_token }}
-      mode: '0644'
+          token: {{ hostvars[groups['MASTER'][0]].rke2_token }}
 
     - name: Enable and start RKE2 agent
       systemd:
         name: rke2-agent
-        enabled: true
-        state: restarted
+        enabled: yes
+        state: started
