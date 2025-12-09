@@ -1,0 +1,44 @@
+---
+- name: Configure kubectl on master
+  hosts: MASTER
+  become: true
+
+  vars:
+    kubeconfig_path: /etc/rancher/rke2/rke2.yaml
+    user_home: "/home/sai"
+    user_kube_dir: "{{ user_home }}/.kube"
+    user_kube_config: "{{ user_kube_dir }}/config"
+    master_ip: "{{ inventory_hostname }}"
+
+  tasks:
+
+    - name: Symlink kubectl binary
+      file:
+        src: /var/lib/rancher/rke2/bin/kubectl
+        dest: /usr/local/bin/kubectl
+        state: link
+        mode: '0777'
+
+    - name: Create user .kube directory
+      file:
+        path: "{{ user_kube_dir }}"
+        state: directory
+        mode: '0755'
+        owner: sai
+        group: sai
+
+    - name: Copy kubeconfig to user .kube/config
+      command: cp {{ kubeconfig_path }} {{ user_kube_config }}
+
+    - name: Set permissions on kubeconfig
+      file:
+        path: "{{ user_kube_config }}"
+        owner: sai
+        group: sai
+        mode: '0600'
+
+    - name: Replace localhost with master IP in kubeconfig
+      replace:
+        path: "{{ user_kube_config }}"
+        regexp: "127.0.0.1"
+        replace: "{{ master_ip }}"
