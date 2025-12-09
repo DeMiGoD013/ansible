@@ -1,79 +1,76 @@
 pipeline {
-
   agent any
 
-  parameters {
-    choice(name: 'ACTION', choices: ['install','uninstall'], description: 'Choose whether to install or uninstall RKE2')
-    string(name: 'INVENTORY_PATH', defaultValue: 'inventory.ini', description: 'Path to Ansible inventory (relative to repo root)')
-    string(name: 'EXTRA_VARS', defaultValue: '', description: 'Any extra vars to pass to ansible-playbook (e.g. "rke2_version=1.27.0")')
-    string(name: 'ANSIBLE_LIMIT', defaultValue: '', description: 'Limit to subset of hosts (optional), e.g. "MASTER" or "worker1"')
-    booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'If true, perform ansible-playbook --check')
-  }
-
   environment {
-    SSH_CREDENTIALS_ID = 'rke2_ssh'
-    ANSIBLE_LOG = 'ansible-run.log'
-    ANSIBLE_HOST_KEY_CHECKING = 'False'
+    INVENTORY = "inventory.ini"
+    PLAYBOOK  = "full-cluster-automation.yml"
+    MASTER_IP = "10.0.2.15"
+    SSH_CREDS = "sai"
   }
 
   stages {
-
-    stage('Prepare') {
-      steps {
-        sh 'echo "Workspace contents:" && ls -la'
-        sh 'echo "ACTION=$ACTION INVT=$INVENTORY_PATH LIMIT=$ANSIBLE_LIMIT DRY_RUN=$DRY_RUN"'
-      }
-    }
-
     stage('Checkout') {
       steps {
         checkout scm
+        sh 'ls -la'
       }
     }
 
-    stage('Install dependencies (if needed)') {
+    stage('Prepare SSH known_hosts') {
       steps {
-        sh 'ansible --version || (pip install ansible && ansible --version)'
-      }
-    }
+        sshagent(credentials: [env.SSH_CREDS]) {
+          sh '''
+            mkdir -p ~/.ssh
+            touch ~/.ssh/known_hosts
 
-    stage('Run playbook') {
-      steps {
-        sshagent (credentials: [env.SSH_CREDENTIALS_ID]) {
-          script {
-            def playbook = (params.ACTION == 'install') ? 'install-rke2.yml' : 'uninstall-rke2.yml'
+            # Extract IPs from inventory
+            grep -Eo '^[0-9]+(\\.[0-9]+){3}' ${INVENTORY} > hosts.list || true
 
-            def extra = params.EXTRA_VARS?.trim() ? "--extra-vars '${params.EXTRA_VARS}'" : ''
-            def limit = params.ANSIBLE_LIMIT?.trim() ? "-l '${params.ANSIBLE_LIMIT}'" : ''
-            def check = params.DRY_RUN ? '--check' : ''
+            while read host; do
+              ssh-keyscan -H $host >> ~/.ssh/known_hosts 2>/dev/null || true
+            done < hosts.list
 
-            sh """
-              echo "Running playbook: ${playbook}"
-              ansible-playbook -i ${params.INVENTORY_PATH} ${playbook} ${extra} ${limit} ${check} | tee ${ANSIBLE_LOG}
-            """
-          }
+            rm -f hosts.list
+          '''
         }
       }
     }
 
-    stage('Archive logs') {
+    stage('Run Ansible Playbook') {
       steps {
-        archiveArtifacts artifacts: "${ANSIBLE_LOG}", allowEmptyArchive: true
+        sshagent(credentials: [env.SSH_CREDS]) {
+          sh '''
+            ansible-playbook -i ${INVENTORY} ${PLAYBOOK}
+          '''
+        }
       }
     }
 
-  } // end stages
+    stage('Fetch kubeconfig') {
+      steps {
+        sshagent(credentials: [env.SSH_CREDS]) {
+          sh '''
+            echo "Fetching kubeconfig from master..."
+            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/home/sai/.kube/config kubeconfig.yaml
+          '''
+        }
+      }
+    }
 
-  post {
-    success {
-      echo "Playbook finished successfully."
-    }
-    failure {
-      echo "Playbook failed — check the archived ${ANSIBLE_LOG} for details."
-    }
-    always {
-      sh "tail -n 200 ${ANSIBLE_LOG} || true"
+    stage('Archive kubeconfig') {
+      steps {
+        archiveArtifacts artifacts: 'kubeconfig.yaml', allowEmptyArchive: true
+        echo "You can now download kubeconfig from Jenkins > Build Artifacts!"
+      }
     }
   }
 
-} // end pipeline
+  post {
+    success {
+      echo "Cluster Created Successfully!"
+    }
+    failure {
+      echo "Pipeline Failed!"
+    }
+  }
+}
