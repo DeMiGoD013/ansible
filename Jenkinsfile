@@ -1,76 +1,73 @@
 pipeline {
   agent any
 
+  parameters {
+    choice(name: 'ACTION', choices: ['install','uninstall'], description: 'Choose operation')
+  }
+
   environment {
-    INVENTORY = "inventory.ini"
-    PLAYBOOK  = "full-cluster-automation.yml"
-    MASTER_IP = "10.0.2.15"
-    SSH_CREDS = "sai"
+    SSH_CREDENTIALS_ID = 'sai'        // set this to your Jenkins SSH credential id
+    ANSIBLE_LOG = 'ansible-run.log'
+    MASTER_IP = '10.0.2.15'           // change if different
   }
 
   stages {
     stage('Checkout') {
+      steps { checkout scm }
+    }
+
+    stage('Install dependencies (optional)') {
       steps {
-        checkout scm
-        sh 'ls -la'
+        sh 'ansible --version || (pip install ansible && ansible --version)'
       }
     }
 
-    stage('Prepare SSH known_hosts') {
+    stage('Run playbook') {
       steps {
-        sshagent(credentials: [env.SSH_CREDS]) {
-          sh '''
-            mkdir -p ~/.ssh
-            touch ~/.ssh/known_hosts
-
-            # Extract IPs from inventory
-            grep -Eo '^[0-9]+(\\.[0-9]+){3}' ${INVENTORY} > hosts.list || true
-
-            while read host; do
-              ssh-keyscan -H $host >> ~/.ssh/known_hosts 2>/dev/null || true
-            done < hosts.list
-
-            rm -f hosts.list
-          '''
+        sshagent(credentials: [env.SSH_CREDENTIALS_ID]) {
+          script {
+            def playbook = (params.ACTION == 'install') ? 'install-rke2.yml' : 'uninstall-rke2.yml'
+            sh """
+              echo "Running playbook: ${playbook}"
+              ansible-playbook -i inventory.ini ${playbook} | tee ${ANSIBLE_LOG}
+            """
+          }
         }
       }
     }
 
-    stage('Run Ansible Playbook') {
+    stage('Fetch kubeconfig from Master') {
+      when { expression { params.ACTION == 'install' } }
       steps {
-        sshagent(credentials: [env.SSH_CREDS]) {
-          sh '''
-            ansible-playbook -i ${INVENTORY} ${PLAYBOOK}
-          '''
-        }
-      }
-    }
-
-    stage('Fetch kubeconfig') {
-      steps {
-        sshagent(credentials: [env.SSH_CREDS]) {
+        sshagent(credentials: [env.SSH_CREDENTIALS_ID]) {
           sh '''
             echo "Fetching kubeconfig from master..."
-            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/home/sai/.kube/config kubeconfig.yaml
+            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/etc/rancher/rke2/rke2.yaml master-kubeconfig.yaml || \
+            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/home/sai/rke2.yaml master-kubeconfig.yaml
+            echo "Patching kubeconfig server IP..."
+            sed -i "s/127.0.0.1/${MASTER_IP}/g" master-kubeconfig.yaml
+            echo "Done."
           '''
         }
       }
     }
 
-    stage('Archive kubeconfig') {
+    stage('Archive logs & kubeconfig') {
       steps {
-        archiveArtifacts artifacts: 'kubeconfig.yaml', allowEmptyArchive: true
-        echo "You can now download kubeconfig from Jenkins > Build Artifacts!"
+        archiveArtifacts artifacts: "${ANSIBLE_LOG}, master-kubeconfig.yaml", allowEmptyArchive: true
       }
     }
   }
 
   post {
+    always {
+      sh "tail -n 200 ${ANSIBLE_LOG} || true"
+    }
     success {
-      echo "Cluster Created Successfully!"
+      echo "Pipeline finished successfully."
     }
     failure {
-      echo "Pipeline Failed!"
+      echo "Pipeline failed — check the archived ${ANSIBLE_LOG} for details."
     }
   }
 }
