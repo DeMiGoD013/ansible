@@ -4,41 +4,37 @@
   become: true
 
   vars:
-    kubeconfig_path: /etc/rancher/rke2/rke2.yaml
-    user_home: "/home/sai"
-    user_kube_dir: "{{ user_home }}/.kube"
-    user_kube_config: "{{ user_kube_dir }}/config"
-    master_ip: "{{ inventory_hostname }}"
+    kube_user: "sai"
 
   tasks:
-
-    - name: Symlink kubectl binary
+    - name: Symlink kubectl
       file:
         src: /var/lib/rancher/rke2/bin/kubectl
         dest: /usr/local/bin/kubectl
         state: link
         mode: '0777'
 
-    - name: Create user .kube directory
+    - name: Create .kube directory for user
       file:
-        path: "{{ user_kube_dir }}"
+        path: "/home/{{ kube_user }}/.kube"
         state: directory
         mode: '0755'
-        owner: sai
-        group: sai
+        owner: "{{ kube_user }}"
+        group: "{{ kube_user }}"
 
-    - name: Copy kubeconfig to user .kube/config
-      command: cp {{ kubeconfig_path }} {{ user_kube_config }}
+    - name: Copy kubeconfig to user home
+      become: true
+      command: cp /etc/rancher/rke2/rke2.yaml "/home/{{ kube_user }}/.kube/config"
 
-    - name: Set permissions on kubeconfig
+    - name: Fix permissions
       file:
-        path: "{{ user_kube_config }}"
-        owner: sai
-        group: sai
+        path: "/home/{{ kube_user }}/.kube/config"
+        owner: "{{ kube_user }}"
+        group: "{{ kube_user }}"
         mode: '0600'
 
-    - name: Replace localhost with master IP in kubeconfig
+    - name: Replace localhost with master IP
       replace:
-        path: "{{ user_kube_config }}"
+        path: "/home/{{ kube_user }}/.kube/config"
         regexp: "127.0.0.1"
-        replace: "{{ master_ip }}"
+        replace: "{{ hostvars[inventory_hostname].ansible_host }}"

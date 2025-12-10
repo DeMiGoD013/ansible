@@ -70,3 +70,5 @@
         name: rke2-agent
         enabled: yes
         state: started
+
+- import_playbook: configure-kubectl.yml

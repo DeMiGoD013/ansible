@@ -13,7 +13,7 @@ pipeline {
   environment {
     SSH_CREDENTIALS_ID = 'rke2_ssh'
     ANSIBLE_LOG = 'ansible-run.log'
-    MASTER_IP = '10.0.2.15'     // <---- CHANGE IF YOUR MASTER CHANGES
+    MASTER_IP = '10.0.2.15'
     ANSIBLE_HOST_KEY_CHECKING = 'False'
   }
 
@@ -32,7 +32,6 @@ pipeline {
       }
     }
 
-    // ⭐ NEW STAGE: Add known_hosts dynamically
     stage('Prepare SSH known_hosts') {
       steps {
         sshagent(credentials: [env.SSH_CREDENTIALS_ID]) {
@@ -40,7 +39,6 @@ pipeline {
             mkdir -p ~/.ssh
             touch ~/.ssh/known_hosts
 
-            # Extract IPs from inventory
             grep -Eo '^[0-9]+(\\.[0-9]+){3}' ${INVENTORY_PATH} > hosts.list || true
             grep -Eo 'ansible_host=[0-9]+(\\.[0-9]+){3}' ${INVENTORY_PATH} | sed 's/ansible_host=//' >> hosts.list || true
 
@@ -65,7 +63,6 @@ pipeline {
         sshagent (credentials: [env.SSH_CREDENTIALS_ID]) {
           script {
             def playbook = (params.ACTION == 'install') ? 'install-rke2.yml' : 'uninstall-rke2.yml'
-
             def extra = params.EXTRA_VARS?.trim() ? "--extra-vars '${params.EXTRA_VARS}'" : ''
             def limit = params.ANSIBLE_LIMIT?.trim() ? "-l '${params.ANSIBLE_LIMIT}'" : ''
             def check = params.DRY_RUN ? '--check' : ''
@@ -79,20 +76,25 @@ pipeline {
       }
     }
 
-    // ⭐ NEW STAGE: AUTO FETCH kubeconfig (ONLY for INSTALL)
     stage('Fetch kubeconfig') {
       when {
         expression { params.ACTION == 'install' }
       }
       steps {
-        echo "Fetching kubeconfig from master node..."
         sshagent(credentials: [env.SSH_CREDENTIALS_ID]) {
           sh '''
-            # Copy kubeconfig from master
-            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/home/sai/.kube/config kubeconfig.yaml || {
-              echo "WARNING: kubeconfig not found on master"
-              exit 1
-            }
+            echo "Fetching kubeconfig from master..."
+
+            # Copy kubeconfig to Jenkins workspace
+            scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/home/sai/.kube/config kubeconfig.yaml
+
+            # Deploy kubeconfig on Jenkins agent
+            mkdir -p ~/.kube
+            cp kubeconfig.yaml ~/.kube/config
+            chmod 600 ~/.kube/config
+
+            echo "Kubeconfig installed — verifying connection..."
+            kubectl get nodes || true
           '''
         }
       }
@@ -104,7 +106,6 @@ pipeline {
       }
     }
 
-    // ⭐ NEW STAGE: ARCHIVE KUBECONFIG FILE
     stage('Archive kubeconfig') {
       when {
         expression { params.ACTION == 'install' }
