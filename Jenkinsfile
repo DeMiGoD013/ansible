@@ -39,10 +39,13 @@ pipeline {
             mkdir -p ~/.ssh
             touch ~/.ssh/known_hosts
 
+            # Extract IPs from inventory
             grep -Eo '^[0-9]+(\\.[0-9]+){3}' ${INVENTORY_PATH} > hosts.list || true
             grep -Eo 'ansible_host=[0-9]+(\\.[0-9]+){3}' ${INVENTORY_PATH} | sed 's/ansible_host=//' >> hosts.list || true
 
+            # Add hosts to known_hosts
             sort -u hosts.list | while read host; do
+              [ -z "$host" ] && continue
               ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null || true
             done
 
@@ -54,7 +57,9 @@ pipeline {
 
     stage('Install dependencies (if needed)') {
       steps {
-        sh 'ansible --version || (pip install ansible && ansible --version)'
+        sh '''
+          ansible --version || (pip install ansible && ansible --version)
+        '''
       }
     }
 
@@ -62,14 +67,20 @@ pipeline {
       steps {
         sshagent (credentials: [env.SSH_CREDENTIALS_ID]) {
           script {
+
             def playbook = (params.ACTION == 'install') ? 'install-rke2.yml' : 'uninstall-rke2.yml'
             def extra = params.EXTRA_VARS?.trim() ? "--extra-vars '${params.EXTRA_VARS}'" : ''
             def limit = params.ANSIBLE_LIMIT?.trim() ? "-l '${params.ANSIBLE_LIMIT}'" : ''
             def check = params.DRY_RUN ? '--check' : ''
 
             sh """
+              set -e
               echo "Running playbook: ${playbook}"
-              ansible-playbook -i ${params.INVENTORY_PATH} ${playbook} ${extra} ${limit} ${check} | tee ${ANSIBLE_LOG}
+
+              ansible-playbook \
+                -i ${params.INVENTORY_PATH} \
+                ${playbook} ${extra} ${limit} ${check} \
+                | tee ${ANSIBLE_LOG}
             """
           }
         }
@@ -77,23 +88,21 @@ pipeline {
     }
 
     stage('Fetch kubeconfig') {
-      when {
-        expression { params.ACTION == 'install' }
-      }
+      when { expression { params.ACTION == 'install' } }
       steps {
         sshagent(credentials: [env.SSH_CREDENTIALS_ID]) {
           sh '''
             echo "Fetching kubeconfig from master..."
 
-            # Copy kubeconfig to Jenkins workspace
+            # Copy kubeconfig from master node
             scp -o StrictHostKeyChecking=no sai@${MASTER_IP}:/home/sai/.kube/config kubeconfig.yaml
 
-            # Deploy kubeconfig on Jenkins agent
+            # Install kubeconfig on Jenkins agent
             mkdir -p ~/.kube
             cp kubeconfig.yaml ~/.kube/config
             chmod 600 ~/.kube/config
 
-            echo "Kubeconfig installed — verifying connection..."
+            echo "Kubeconfig installed — verifying cluster..."
             kubectl get nodes || true
           '''
         }
@@ -107,9 +116,7 @@ pipeline {
     }
 
     stage('Archive kubeconfig') {
-      when {
-        expression { params.ACTION == 'install' }
-      }
+      when { expression { params.ACTION == 'install' } }
       steps {
         archiveArtifacts artifacts: "kubeconfig.yaml", allowEmptyArchive: false
       }

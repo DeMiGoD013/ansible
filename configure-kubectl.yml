@@ -7,6 +7,7 @@
     kube_user: "sai"
 
   tasks:
+
     - name: Symlink kubectl
       file:
         src: /var/lib/rancher/rke2/bin/kubectl
@@ -23,7 +24,6 @@
         group: "{{ kube_user }}"
 
     - name: Copy kubeconfig to user home
-      become: true
       command: cp /etc/rancher/rke2/rke2.yaml "/home/{{ kube_user }}/.kube/config"
 
     - name: Fix permissions
@@ -33,8 +33,9 @@
         group: "{{ kube_user }}"
         mode: '0600'
 
+    # ⭐ FIXED TASK — SAFE FALLBACK FOR MASTER IP ⭐
     - name: Replace localhost with master IP
       replace:
         path: "/home/{{ kube_user }}/.kube/config"
         regexp: "127.0.0.1"
-        replace: "{{ hostvars[inventory_hostname].ansible_host }}"
+        replace: "{{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}"
